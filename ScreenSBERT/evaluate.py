@@ -57,7 +57,7 @@ def topk_accuracy(truth, pred):
     return np.mean(acc).item()
 
 if __name__ == "__main__":
-    device = "cuda:1" if torch.cuda.is_available() else "cpu"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     model = ScreenSBERT(device=device).to(device)
     model.load_state_dict(torch.load(f"./weights/evaluate_X_Temu.pth", weights_only=True))
     model.eval()

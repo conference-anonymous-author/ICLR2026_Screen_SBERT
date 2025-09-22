@@ -1,30 +1,23 @@
+import os, sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
 import torch
-import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
-import math
 import numpy as np
 from torch.nn.utils.rnn import pad_sequence
-import random
-from sklearn.metrics import precision_recall_curve
-from sklearn.model_selection import train_test_split
 import torchvision.transforms as transforms
-import copy
-from collections import defaultdict
 from transformers import get_scheduler
 
-from utils import possible_same_pairs, possible_different_pairs, print_gradients, get_different_pairs, valid_macro_f1, generate_class2num
-from screen_class import Instagram_class2idx, Facebook_class2idx, Amazon_class2idx, Coupang_class2idx, X_class2idx, Temu_class2idx
 from PW2SS import PW2SS
 
-def prepare_dataset(app_list, split_data, flag):
+def load_dataset(app_list, train_valid_split, flag):
     screen_indices = []
     app_names = []
     
     for app in app_list:
-        class2idx = split_data[f"{app}_{flag}"]
-        for page_label, values in class2idx.items():
+        page2screen_indices = train_valid_split[f"{app}_{flag}"]
+        for _, values in page2screen_indices.items():
             screen_indices += values
             app_names += ([app]*len(values))
 
@@ -58,53 +51,30 @@ def DataLoader_fn(batch):
     }
 
 if __name__ == "__main__":
-    device = "cuda:0"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     model = PW2SS(device=device).to(device)
 
-    class2idx_dict = {
-        "Instagram": Instagram_class2idx,
-        "Facebook": Facebook_class2idx,
-        "X": X_class2idx,
-        "Amazon": Amazon_class2idx,
-        "Coupang": Coupang_class2idx,
-        "Temu": Temu_class2idx
-    }
-    class2num_dict = {
-        "Instagram": generate_class2num(Instagram_class2idx),
-        "Facebook": generate_class2num(Facebook_class2idx),
-        "X": generate_class2num(X_class2idx),
-        "Amazon": generate_class2num(Amazon_class2idx),
-        "Coupang": generate_class2num(Coupang_class2idx),
-        "Temu": generate_class2num(Temu_class2idx)
-    }
-
-    split_data = np.load("./splits/split_0724.npy", allow_pickle=True).item()
-
-    num_workers = 0
-    model_path = "./weights/other_apps/PW2SS/X_Temu"
+    train_valid_split = np.load("../dataset/train_valid_split.npy", allow_pickle=True).item()
 
     app_list = ["Facebook", "Instagram", "Amazon", "Coupang"]
 
     best_val_loss = float('inf')
 
-    screen_indices_train, app_names_train = prepare_dataset(app_list, split_data, flag="train")
+    screen_indices_train, app_names_train = load_dataset(app_list, train_valid_split, flag="train")
     dataset_train = ScreenDataset(screen_indices_train, app_names_train)
     dataloader_train = DataLoader(
         dataset_train,
         batch_size=8,
         shuffle=True,
-        num_workers=num_workers,
         collate_fn=DataLoader_fn
     )
-    num_batch = len(dataloader_train)
 
-    screen_indices_val, app_names_val = prepare_dataset(app_list, split_data, flag="val")
+    screen_indices_val, app_names_val = load_dataset(app_list, train_valid_split, flag="val")
     dataset_val = ScreenDataset(screen_indices_val, app_names_val)
     dataloader_val = DataLoader(
         dataset_val,
         batch_size=8,
         shuffle=True,
-        num_workers=num_workers,
         collate_fn=DataLoader_fn
     )
 
@@ -125,14 +95,13 @@ if __name__ == "__main__":
     optimizer.zero_grad()
     for epoch in range(max_epoch):
         model.train()
-        train_losses = []
         for batch in dataloader_train:         
             screen_indices = batch["screen_indices"]
             app_names = batch["app_names"]
             
             text_embed = []
             text_coords = []
-            graphic_class_idx = []
+            graphic_types = []
             graphic_coords = []
             layout = []
         
@@ -140,15 +109,20 @@ if __name__ == "__main__":
                 si = screen_indices[bi]
                 app = app_names[bi]
                 
-                text_embed.append(torch.tensor(np.load(f"./dataset/{app}/{si}/screen_ocr_embed.npy")))
-                text_coords.append(torch.tensor(np.load(f"./dataset/{app}/{si}/screen_ocr_coords.npy")))
-                graphic_class_idx.append(torch.tensor(np.load(f"./dataset/{app}/{si}/gui_class_idx.npy")))
-                graphic_coords.append(torch.tensor(np.load(f"./dataset/{app}/{si}/gui_coords.npy")))
-                layout.append(transforms_fn(np.load(f"./dataset/{app}/{si}/layout.npy")))
+                # The input format used in PW2SS differs from that of other models.
+                # The corresponding dataset is not publicly available in the current repository.
+                # For details on the PW2SS input format, please refer to the original paper.
+                # "You can immediately evaluate the retrieval performance using the provided embeddings file."
+
+                text_embed.append(torch.tensor(np.load(f".../dataset/{app}/{si}/screen_ocr_embed.npy")))
+                text_coords.append(torch.tensor(np.load(f".../dataset/{app}/{si}/screen_ocr_coords.npy")))
+                graphic_types.append(torch.tensor(np.load(f".../dataset/{app}/{si}/gui_class_idx.npy")))
+                graphic_coords.append(torch.tensor(np.load(f".../dataset/{app}/{si}/gui_coords.npy")))
+                layout.append(transforms_fn(np.load(f".../dataset/{app}/{si}/layout_image.npy")))
 
             padded_text_embed = pad_sequence(text_embed, batch_first=True).float().to(device)
             padded_text_coords = pad_sequence(text_coords, batch_first=True).float().to(device)
-            padded_graphic_class_idx = pad_sequence(graphic_class_idx, batch_first=True, padding_value=27).to(device)
+            padded_graphic_types = pad_sequence(graphic_types, batch_first=True, padding_value=27).to(device)
             padded_graphic_coords = pad_sequence(graphic_coords, batch_first=True).float().to(device)
             padded_layout = pad_sequence(layout, batch_first=True).float().to(device)
         
@@ -164,25 +138,17 @@ if __name__ == "__main__":
                 text_coords=padded_text_coords, 
                 text_mask=text_mask, 
                 
-                graphic_class_idx=padded_graphic_class_idx, 
+                graphic_types=padded_graphic_types, 
                 graphic_coords=padded_graphic_coords, 
                 graphic_mask=graphic_mask, 
                 
                 layout=padded_layout
             )
             loss.backward()
-            train_losses.append(loss.item())
-            #print_gradients(model)
-            #break
+
             optimizer.step()
             scheduler.step()
             optimizer.zero_grad()
-
-        #break
-
-        log_msg = f"(PW2SS_X_Temu) Train {epoch} >> "
-        log_msg += f"Loss: {np.mean(train_losses):.6f}"
-        print(log_msg)
 
         model.eval()
         with torch.no_grad():
@@ -193,7 +159,7 @@ if __name__ == "__main__":
                 
                 text_embed = []
                 text_coords = []
-                graphic_class_idx = []
+                graphic_types = []
                 graphic_coords = []
                 layout = []
             
@@ -201,15 +167,15 @@ if __name__ == "__main__":
                     si = screen_indices[bi]
                     app = app_names[bi]
                     
-                    text_embed.append(torch.tensor(np.load(f"./dataset/{app}/{si}/screen_ocr_embed.npy")))
-                    text_coords.append(torch.tensor(np.load(f"./dataset/{app}/{si}/screen_ocr_coords.npy")))
-                    graphic_class_idx.append(torch.tensor(np.load(f"./dataset/{app}/{si}/gui_class_idx.npy")))
-                    graphic_coords.append(torch.tensor(np.load(f"./dataset/{app}/{si}/gui_coords.npy")))
-                    layout.append(transforms_fn(np.load(f"./dataset/{app}/{si}/layout.npy")))
+                    text_embed.append(torch.tensor(np.load(f".../dataset/{app}/{si}/screen_ocr_embed.npy")))
+                    text_coords.append(torch.tensor(np.load(f".../dataset/{app}/{si}/screen_ocr_coords.npy")))
+                    graphic_types.append(torch.tensor(np.load(f".../dataset/{app}/{si}/gui_class_idx.npy")))
+                    graphic_coords.append(torch.tensor(np.load(f".../dataset/{app}/{si}/gui_coords.npy")))
+                    layout.append(transforms_fn(np.load(f".../dataset/{app}/{si}/layout_image.npy")))
     
                 padded_text_embed = pad_sequence(text_embed, batch_first=True).float().to(device)
                 padded_text_coords = pad_sequence(text_coords, batch_first=True).float().to(device)
-                padded_graphic_class_idx = pad_sequence(graphic_class_idx, batch_first=True, padding_value=27).to(device)
+                padded_graphic_types = pad_sequence(graphic_types, batch_first=True, padding_value=27).to(device)
                 padded_graphic_coords = pad_sequence(graphic_coords, batch_first=True).float().to(device)
                 padded_layout = pad_sequence(layout, batch_first=True).float().to(device)
             
@@ -225,7 +191,7 @@ if __name__ == "__main__":
                     text_coords=padded_text_coords, 
                     text_mask=text_mask, 
                     
-                    graphic_class_idx=padded_graphic_class_idx, 
+                    graphic_types=padded_graphic_types, 
                     graphic_coords=padded_graphic_coords, 
                     graphic_mask=graphic_mask, 
                     
@@ -234,13 +200,6 @@ if __name__ == "__main__":
                 val_losses.append(val_loss.item())
     
             val_loss = np.mean(val_losses)
-            log_msg = f"(PW2SS) Val {epoch} >> "
-            log_msg += f"Loss: {val_loss:.6f}"
-            print(log_msg)
-    
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                #torch.save(model.state_dict(), f"{model_path}/checkpoint_{epoch}.pth")
-                torch.save(model.state_dict(), f"{model_path}/bestmodel.pth")
-                with open(f"{model_path}/val_log.txt", 'a') as f:
-                    f.write(log_msg + "\n")
+                torch.save(model.state_dict(), "./weights/bestmodel.pth")

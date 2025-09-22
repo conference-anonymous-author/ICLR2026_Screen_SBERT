@@ -155,7 +155,7 @@ def validation_score(embeddings, page_classes):
     return intra_distance, inter_distance, score
 
 if __name__ == "__main__":
-    device = "cuda:1" if torch.cuda.is_available() else "cpu"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     model = ScreenSBERT(device=device).to(device)
 
     train_valid_split = np.load("../dataset/train_valid_split.npy", allow_pickle=True).item()
