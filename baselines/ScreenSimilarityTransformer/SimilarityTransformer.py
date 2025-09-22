@@ -5,20 +5,20 @@ import math
 import numpy as np
 
 class GUIEmbedding(nn.Module):
-    def __init__(self, vision_dim=512*7*7, embed_dim=64, num_class=28):
+    def __init__(self, vision_dim=512*7*7, embed_dim=64, num_types=28):
         super().__init__()
 
         self.coord_proj = nn.Linear(6, embed_dim)
-        self.type_table = nn.Embedding(num_class, embed_dim, padding_idx=27)
+        self.type_table = nn.Embedding(num_types, embed_dim, padding_idx=27)
         self.vision_proj = nn.Linear(vision_dim, embed_dim)
         self.screen_table = nn.Embedding(2, embed_dim)
 
-    def forward(self, coords, class_idx, visions, screen_idx):
+    def forward(self, coords, types, visions, screen_idx):
         E_coord = self.coord_proj(coords)
-        E_type = self.type_table(class_idx)
+        E_type = self.type_table(types)
         E_vision = self.vision_proj(visions)
 
-        screen_idx_tensor = torch.full(class_idx.shape, screen_idx, dtype=torch.long, device=coords.device)
+        screen_idx_tensor = torch.full(types.shape, screen_idx, dtype=torch.long, device=coords.device)
         E_screen = self.screen_table(screen_idx_tensor)
 
         combined = torch.cat([E_coord, E_type, E_vision, E_screen], dim=2)
@@ -110,12 +110,12 @@ class TransformerEncoder(nn.Module):
         return x
 
 class SimilarityTransformer(nn.Module):
-    def __init__(self, device, vision_dim=512*7*7, embed_dim=256, num_class=28, num_heads=8, num_layers=6, d_ff=1024, dropout=0.3):
+    def __init__(self, device, vision_dim=512*7*7, embed_dim=256, num_types=28, num_heads=8, num_layers=6, d_ff=1024, dropout=0.3):
         super().__init__()
 
         self.device = device
 
-        self.gui_embedding = GUIEmbedding(vision_dim, 64, num_class)
+        self.gui_embedding = GUIEmbedding(vision_dim, 64, num_types)
 
         self.sim_token = nn.Parameter(torch.randn(1, 1, embed_dim))
         self.mask_token = torch.zeros((1, 1, embed_dim)).to(device)
@@ -124,11 +124,11 @@ class SimilarityTransformer(nn.Module):
 
         self.similarity_predictor = nn.Linear(embed_dim, 1)
         self.coord_reconstructor = nn.Linear(embed_dim, 6)
-        self.class_idx_reconstructor = nn.Linear(embed_dim, num_class)
+        self.type_reconstructor = nn.Linear(embed_dim, num_types)
         self.vision_reconstructor = nn.Linear(embed_dim, vision_dim)
 
         self.coord_loss_fn = nn.MSELoss()
-        self.class_loss_fn = nn.CrossEntropyLoss()
+        self.type_loss_fn = nn.CrossEntropyLoss()
         self.vision_loss_fn = nn.MSELoss()
 
     def forward(
@@ -161,50 +161,44 @@ class SimilarityTransformer(nn.Module):
             return pred_sim, None, None, None
         else:
             masked_coords1 = coords1[mask_indices1]
-            masked_class_idx1 = types1[mask_indices1]
+            masked_types1 = types1[mask_indices1]
             masked_visions1 = visions1[mask_indices1]
             masked_encodings1 = enc[:, 1:types1.size(1)+1][mask_indices1]
     
             masked_coords2 = coords2[mask_indices2]
-            masked_class_idx2 = types2[mask_indices2]
+            masked_types2 = types2[mask_indices2]
             masked_visions2 = visions2[mask_indices2]
             masked_encodings2 = enc[:, types1.size(1)+1:][mask_indices2]
     
             masked_coords = torch.cat([masked_coords1, masked_coords2], dim=0)
-            masked_class_idx = torch.cat([masked_class_idx1, masked_class_idx2], dim=0)
+            masked_types = torch.cat([masked_types1, masked_types2], dim=0)
             masked_visions = torch.cat([masked_visions1, masked_visions2], dim=0)
             masked_encodings = torch.cat([masked_encodings1, masked_encodings2], dim=0)
     
-            # coord 복원: (N_mask, 4)
             pred_coords = self.coord_reconstructor(masked_encodings)
             coord_loss = self.coord_loss_fn(pred_coords, masked_coords)
     
-            # class_idx 복원
-            pred_class_idx = self.class_idx_reconstructor(masked_encodings)
-            class_loss = self.class_loss_fn(pred_class_idx, masked_class_idx)
+            types = self.type_reconstructor(masked_encodings)
+            type_loss = self.type_loss_fn(types, masked_types)
 
-            # vision 복원
             pred_visions = self.vision_reconstructor(masked_encodings)
             vision_loss = self.vision_loss_fn(pred_visions, masked_visions)
     
-            return pred_sim, coord_loss, class_loss, vision_loss
+            return pred_sim, coord_loss, type_loss, vision_loss
 
     def mask_gui(self, padding_mask, mask_ratio=0.15):
         B, G = padding_mask.shape
     
         rand = torch.rand(B, G, device=self.device)
-        rand[~padding_mask] = 1.1  # 패딩은 선택 안 되게
+        rand[~padding_mask] = 1.1
     
-        valid_counts = padding_mask.sum(dim=1)  # (B,)
-        k = (valid_counts.float() * mask_ratio).ceil().long()  # (B,)
+        valid_counts = padding_mask.sum(dim=1)
+        k = (valid_counts.float() * mask_ratio).ceil().long()
     
-        # 정렬된 인덱스
-        sorted_indices = torch.argsort(rand, dim=1)  # (B, G)
+        sorted_indices = torch.argsort(rand, dim=1)
     
-        # 마스킹용 인덱스 선택 마스크: (B, G)
-        mask_selector = torch.arange(G, device=self.device).expand(B, G) < k.unsqueeze(1)  # (B, G)
+        mask_selector = torch.arange(G, device=self.device).expand(B, G) < k.unsqueeze(1)
     
-        # 배치별 scatter
         mask_indices = torch.zeros(B, G, dtype=torch.bool, device=self.device)
         mask_indices.scatter_(1, sorted_indices, mask_selector)
     
