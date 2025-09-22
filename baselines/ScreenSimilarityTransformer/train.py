@@ -9,7 +9,6 @@ from transformers import get_scheduler
 from itertools import combinations
 import random
 
-from utils import possible_same_pairs, possible_different_pairs, get_different_pairs, valid_macro_f1
 from SimilarityTransformer import SimilarityTransformer
 
 def possible_same_pairs(page2screen_indices):

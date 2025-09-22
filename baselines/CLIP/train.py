@@ -1,51 +1,47 @@
+import os, sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
 import torch
-import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
-import math
 import numpy as np
-from torch.nn.utils.rnn import pad_sequence
 import random
-from sklearn.metrics import precision_recall_curve
-from sklearn.model_selection import train_test_split
-import torchvision.transforms as transforms
 import copy
 from collections import defaultdict
 from transformers import get_scheduler, CLIPProcessor, CLIPModel
 from PIL import Image
 
-from utils import possible_same_pairs, possible_different_pairs, print_gradients, get_different_pairs, valid_macro_f1, generate_class2num
-from screen_class import Instagram_class2idx, Facebook_class2idx, X_class2idx, Amazon_class2idx, Coupang_class2idx, Temu_class2idx
+from dataset.page_labels import page2screen_indices_dict, page_indices_dict
 
-def prepare_trainset(app_list, split_data):
-    screen_indices = []
-    page_labels = []
+def load_train_data(app_list, train_valid_split):
+    total_screen_indices = []
+    page_classes = []
     app_names = []
     
     for app in app_list:
-        class2idx = split_data[f"{app}_train"]
-        for page_label, values in class2idx.items():
-            screen_indices += values
-            page_labels += ([page_label]*len(values))
-            app_names += ([app]*len(values))
+        page2screen_indices = train_valid_split[f"{app}_train"]
+        for page_class, screen_indices in page2screen_indices.items():
+            total_screen_indices += screen_indices
+            page_classes += ([page_class]*len(screen_indices))
+            app_names += ([app]*len(screen_indices))
 
-    return screen_indices, page_labels, app_names
+    return total_screen_indices, page_classes, app_names
 
-def prepare_valset(app_list, split_data):
-    valid_set = {}
+def load_valid_data(app_list, train_valid_split):
+    valid_dataset = {}
     
     for app in app_list:
-        valid_set[app] = {
+        valid_dataset[app] = {
             "screen_indices": [],
-            "page_labels": []
+            "page_classes": []
         }
-        class2idx = split_data[f"{app}_val"]
-        for page_text, values in class2idx.items():
-            valid_set[app]["screen_indices"] += values
-            valid_set[app]["page_labels"] += ([class2num_dict[app][page_text]]*len(values))
+        page2screen_indices = train_valid_split[f"{app}_val"]
+        for page_class, screen_indices in page2screen_indices.items():
+            valid_dataset[app]["screen_indices"] += screen_indices
+            valid_dataset[app]["page_classes"] += ([page_indices_dict[app][page_class]]*len(screen_indices))
 
-    return valid_set
+    return valid_dataset
     
 class ScreenDataset(Dataset):
     def __init__(self, screen_indices, page_labels, app_names):
@@ -59,145 +55,123 @@ class ScreenDataset(Dataset):
     def __getitem__(self, idx):   
         return {
             "screen_idx": self.screen_indices[idx],
-            "page_label": self.page_labels[idx],
+            "page_class": self.page_labels[idx],
             "app_name": self.app_names[idx]
         }
 
 def DataLoader_fn(batch):
     screen_indices = []
-    page_labels = []
+    page_classes = []
     app_names = []
 
     for item in batch:
         screen_indices.append(item["screen_idx"])
-        page_labels.append(item["page_label"])
+        page_classes.append(item["page_class"])
         app_names.append(item["app_name"])
     
     return {
         "screen_indices": screen_indices,
-        "page_labels": page_labels,
+        "page_classes": page_classes,
         "app_names": app_names
     }
 
 def make_contrastive_batch(anchor):
     anchor_idx = anchor["screen_indices"][0]
-    anchor_page = anchor["page_labels"][0]
+    anchor_page = anchor["page_classes"][0]
     app_name = anchor["app_names"][0]
 
-    class2idx = class2idx_dict[app_name]
-    if len(class2idx[anchor_page]) < 2:
+    page2screen_indices = page2screen_indices_dict[app_name]
+    if len(page2screen_indices[anchor_page]) < 2:
         negative_only = True
     else:
         negative_only = False
 
     samples = [anchor_idx]
-    for page_label, screen_indices in class2idx.items():
-        if page_label == anchor_page:
+    for page_class, screen_indices in page2screen_indices.items():
+        if page_class == anchor_page:
             if not negative_only:
                 positive_set = copy.deepcopy(screen_indices)
                 positive_set.remove(anchor_idx)
                 positive = random.choice(positive_set)
-                #positive_pair = (anchor_idx, positive)
                 samples.append(positive)
 
-    for page_label, screen_indices in class2idx.items():
-        if page_label != anchor_page:
+    for page_class, screen_indices in page2screen_indices.items():
+        if page_class != anchor_page:
             negative = random.choice(screen_indices)
             samples.append(negative)
 
     return samples, negative_only, app_name
 
-def valid_score(embeddings, labels):
-    labels_tensor = torch.tensor(labels, device=embeddings.device)
-    unique_labels = labels_tensor.unique()
-    class_to_indices = defaultdict(list)
+# measuring how well screens corresponding to the same page cluster together in the embedding space
+def validation_score(embeddings, page_classes):
+    page_classes_tensor = torch.tensor(page_classes, device=embeddings.device)
+    page_classes_unique = page_classes_tensor.unique()
+    page2screen_indices = defaultdict(list)
 
-    for idx, label in enumerate(labels):
-        class_to_indices[label].append(idx)
+    for screen_idx, page_class in enumerate(page_classes):
+        page2screen_indices[page_class].append(screen_idx)
 
-    class_means = {}
-    for label in unique_labels:
-        idxs = class_to_indices[label.item()]
-        class_embeds = embeddings[idxs]
-        class_mean = class_embeds.mean(dim=0)
-        class_means[label.item()] = class_mean
+    cluster_centers = {}
+    for page_class in page_classes_unique:
+        screen_indices = page2screen_indices[page_class.item()]
+        page_cluster = embeddings[screen_indices]
+        cluster_center = page_cluster.mean(dim=0)
+        cluster_centers[page_class.item()] = cluster_center
 
-    # Intra-class distance
-    intra_dists = []
-    for label in unique_labels:
-        idxs = class_to_indices[label.item()]
-        class_embeds = embeddings[idxs]
-        mean = class_means[label.item()]
-        dists = 1 - F.cosine_similarity(class_embeds, mean.unsqueeze(0), dim=1)
-        intra_dists.append(dists.max()) # 가장 먼 것 하나만
+    # Intra-class distance: the distance of each screen from the center of its assigned page cluster
+    intra_distance = []
+    for page_class in page_classes_unique:
+        screen_indices = page2screen_indices[page_class.item()]
+        page_cluster = embeddings[screen_indices]
+        mean = cluster_centers[page_class.item()]
+        dists = 1 - F.cosine_similarity(page_cluster, mean.unsqueeze(0), dim=1)
+        intra_distance.append(dists.max())
 
-    intra_class_distance = torch.stack(intra_dists).mean().item()
+    intra_distance = torch.stack(intra_distance).mean().item()
 
-    # Inter-class distance (mean of all pairwise distances between class centers)
-    inter_dist = 0
-    for ei, true_label in enumerate(labels):
-        emb = embeddings[ei]
-        min_dist = float('inf')
-        for other_label in unique_labels:
-            if other_label == true_label:
+    # Inter-class distance: the distance of each screen to the center of the nearest other page cluster
+    inter_distance = 0
+    for i, page_class in enumerate(page_classes):
+        emb = embeddings[i]
+        min_distance = float('inf')
+        for other_page in page_classes_unique:
+            if other_page == page_class:
                 continue
-            mean = class_means[other_label.item()]
-            dist = 1 - F.cosine_similarity(emb.unsqueeze(0), mean.unsqueeze(0)).item()
-            if dist < min_dist:
-                min_dist = dist
-        inter_dist += min_dist
+            mean = cluster_centers[other_page.item()]
+            distance = 1 - F.cosine_similarity(emb.unsqueeze(0), mean.unsqueeze(0)).item()
+            if distance < min_distance:
+                min_distance = distance
+        inter_distance += min_distance
 
-    inter_class_distance = inter_dist / len(labels)
+    inter_distance = inter_distance / len(page_classes)
 
-    #score = inter_class_distance / (intra_class_distance + 1e-8)
-    score = inter_class_distance - intra_class_distance
+    score = inter_distance - intra_distance
 
-    return intra_class_distance, inter_class_distance, score
+    return intra_distance, inter_distance, score
 
 if __name__ == "__main__":
-    device = "cuda:0"
-    model_name = "openai/clip-vit-base-patch32"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model_name = "openai/clip-vit-base-patch32" # or "openai/clip-vit-base-patch16"
     model = CLIPModel.from_pretrained(model_name).to(device)
     processor = CLIPProcessor.from_pretrained(model_name)
 
-    class2idx_dict = {
-        "Instagram": Instagram_class2idx,
-        "Facebook": Facebook_class2idx,
-        "X": X_class2idx,
-        "Amazon": Amazon_class2idx,
-        "Coupang": Coupang_class2idx,
-        "Temu": Temu_class2idx
-    }
-    class2num_dict = {
-        "Instagram": generate_class2num(Instagram_class2idx),
-        "Facebook": generate_class2num(Facebook_class2idx),
-        "X": generate_class2num(X_class2idx),
-        "Amazon": generate_class2num(Amazon_class2idx),
-        "Coupang": generate_class2num(Coupang_class2idx),
-        "Temu": generate_class2num(Temu_class2idx)
-    }
-
-    split_data = np.load("./splits/split_0724.npy", allow_pickle=True).item()
-
-    num_workers = 0
-    model_path = "./weights/CLIP32/Facebook_Amazon"
+    train_valid_split = np.load("../dataset/train_valid_split.npy", allow_pickle=True).item()
 
     app_list = ["Instagram", "X", "Coupang", "Temu"]
 
     best_val_score = 0
 
-    screen_indices_train, page_labels_train, app_names_train = prepare_trainset(app_list, split_data)
-    dataset_train = ScreenDataset(screen_indices_train, page_labels_train, app_names_train)
+    screen_indices_train, page_classes_train, app_names_train = load_train_data(app_list, train_valid_split)
+    train_dataset = ScreenDataset(screen_indices_train, page_classes_train, app_names_train)
     dataloader_train = DataLoader(
-        dataset_train,
+        train_dataset,
         batch_size=1,
         shuffle=True,
-        num_workers=num_workers,
         collate_fn=DataLoader_fn
     )
     num_batch = len(dataloader_train)
 
-    valid_set = prepare_valset(app_list, split_data)
+    valid_dataset = load_valid_data(app_list, train_valid_split)
 
     max_epoch = 5
     total_steps = len(dataloader_train) * max_epoch
@@ -213,8 +187,6 @@ if __name__ == "__main__":
     temperature = 0.07
     eps = 1e-6
 
-    transforms_fn = transforms.ToTensor()
-
     step = 0
     model.train()
     optimizer.zero_grad()
@@ -223,19 +195,17 @@ if __name__ == "__main__":
             samples, negative_only, app = make_contrastive_batch(anchor)
             
             images = []
-            for s in samples:
-                images.append(Image.open(f"./screenshots/{app}/{s}.png").convert("RGB"))
+            for si in samples:
+                images.append(Image.open(f"./screenshots/{app}/{si}.jpg").convert("RGB"))
 
             inputs = processor(images=images, return_tensors="pt", padding=True).to(device)
             vision_outputs = model.vision_model(**inputs)
             embeddings = vision_outputs.pooler_output
             embeddings = embeddings / embeddings.norm(p=2, dim=-1, keepdim=True)
 
-            # embeddings: (N, D), L2 정규화 완료 가정
-            anchor = embeddings[0:1]           # (1, D)
-            others = embeddings[1:]            # (N-1, D)
+            anchor = embeddings[0:1]
+            others = embeddings[1:]
             
-            # 코사인 유사도: (N-1,)
             cosine_similarities = (others @ anchor.T).squeeze(-1)
             
             if negative_only:
@@ -244,19 +214,14 @@ if __name__ == "__main__":
                 contrastive_loss = torch.clamp(contrastive_loss, min=0.0)
             else:
                 probs = torch.softmax(cosine_similarities / temperature, dim=0)
-                contrastive_loss = -torch.log(probs[0] + eps) # 항상 0번째가 positive pair
+                contrastive_loss = -torch.log(probs[0] + eps)
 
             contrastive_loss.backward()
-            #print_gradients(model)
-            #break
             optimizer.step()
             scheduler.step()
             optimizer.zero_grad()
 
-            log_msg = f"(Facebook_Amazon) Train {step} >> "
-            log_msg += f"Loss: {contrastive_loss.item():.4f}, "
-            log_msg += f"NO: {negative_only}"
-            print(log_msg)
+            print(f"Train {step} >> Loss: {contrastive_loss.item():.4f}, Negative Only: {negative_only}")
 
             step += 1
             if step % 10 == 0: ## Validation ##
@@ -268,8 +233,8 @@ if __name__ == "__main__":
                 
                 with torch.no_grad():
                     for app in app_list:
-                        screen_indices = valid_set[app]["screen_indices"]
-                        page_labels = valid_set[app]["page_labels"]
+                        screen_indices = valid_dataset[app]["screen_indices"]
+                        page_labels = valid_dataset[app]["page_classes"]
                     
                         images = []
                     
@@ -281,7 +246,7 @@ if __name__ == "__main__":
                         embeddings = vision_outputs.pooler_output
                         embeddings = embeddings / embeddings.norm(p=2, dim=-1, keepdim=True)
         
-                        app_intra_d, app_inter_d, app_score = valid_score(embeddings, page_labels)
+                        app_intra_d, app_inter_d, app_score = validation_score(embeddings, page_labels)
                         total_intra_d += app_intra_d
                         total_inter_d += app_inter_d
                         total_score += app_score
@@ -289,13 +254,6 @@ if __name__ == "__main__":
                 print(f"Val {step} >> Intra: {total_intra_d:.6f}, Inter: {total_inter_d:.6f}, Score: {total_score:.6f}")
                 if best_val_score < total_score:
                     best_val_score = total_score
-                    #torch.save(model.state_dict(), f"{model_path}/checkpoint_{step}.pth")
-                    #torch.save(model.state_dict(), f"{model_path}/bestmodel.pth")
-                    model.save_pretrained(f"{model_path}")
-                    processor.save_pretrained(f"{model_path}")
-                    with open(f"{model_path}/val_log.txt", 'a') as f:
-                        f.write(f"Val {step} >> Intra: {total_intra_d:.6f}, Inter: {total_inter_d:.6f}, Score: {total_score:.6f}\n")
+                    model.save_pretrained(f"./weights/B_32")
 
                 model.train()
-
-        #break

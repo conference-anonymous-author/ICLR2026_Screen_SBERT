@@ -20,18 +20,18 @@ from Transformer_2D_RPE import ScreenSBERT
 from dataset.page_labels import page2screen_indices_dict, page_indices_dict
 
 def load_train_data(app_list, train_valid_split):
-    screen_indices = []
+    total_screen_indices = []
     page_classes = []
     app_names = []
     
     for app in app_list:
         page2screen_indices = train_valid_split[f"{app}_train"]
-        for page_class, values in page2screen_indices.items():
-            screen_indices += values
-            page_classes += ([page_class]*len(values))
-            app_names += ([app]*len(values))
+        for page_class, screen_indices in page2screen_indices.items():
+            total_screen_indices += screen_indices
+            page_classes += ([page_class]*len(screen_indices))
+            app_names += ([app]*len(screen_indices))
 
-    return screen_indices, page_classes, app_names
+    return total_screen_indices, page_classes, app_names
 
 def load_valid_data(app_list, train_valid_split):
     valid_dataset = {}
@@ -42,9 +42,9 @@ def load_valid_data(app_list, train_valid_split):
             "page_classes": []
         }
         page2screen_indices = train_valid_split[f"{app}_val"]
-        for page_text, values in page2screen_indices.items():
-            valid_dataset[app]["screen_indices"] += values
-            valid_dataset[app]["page_classes"] += ([page_indices_dict[app][page_text]]*len(values))
+        for page_class, screen_indices in page2screen_indices.items():
+            valid_dataset[app]["screen_indices"] += screen_indices
+            valid_dataset[app]["page_classes"] += ([page_indices_dict[app][page_class]]*len(screen_indices))
 
     return valid_dataset
     
