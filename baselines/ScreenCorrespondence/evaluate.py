@@ -1,69 +1,135 @@
+import os, sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
 import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
-import math
 import numpy as np
-from torch.nn.utils.rnn import pad_sequence
-import random
-from sklearn.metrics import precision_recall_curve
-from sklearn.model_selection import train_test_split
+from sklearn.neighbors import NearestNeighbors
+from sklearn.metrics import precision_score, recall_score, f1_score
 import torchvision.transforms as transforms
+from tqdm import tqdm
 
-from utils import possible_same_pairs, possible_different_pairs, print_gradients, get_different_pairs, valid_macro_f1
-from screen_class import X_class2idx, Temu_class2idx, Instagram_class2idx, Facebook_class2idx, Coupang_class2idx, Amazon_class2idx
 from ScreenCorrespondence import ScreenCorrespondence
+from dataset.page_labels import page2screen_indices_dict, page_indices_dict, screen_idx2page_dict
 
-class2idx_dict = {
-    "Instagram": Instagram_class2idx,
-    "Facebook": Facebook_class2idx,
-    "X": X_class2idx,
-    "Amazon": Amazon_class2idx,
-    "Coupang": Coupang_class2idx,
-    "Temu": Temu_class2idx
-}
+def embed(model, evaluation_apps):
+    embeddings = {}
+    for app in evaluation_apps:
+        embeddings[app] = {}
 
-device = "cuda:0"
+    with torch.no_grad():
+        for app in evaluation_apps:
+            page2screen_indices = page2screen_indices_dict[app]
+            for screen_indices in tqdm(page2screen_indices.values(), desc=f"Embedding {app}"):
+                for screen_idx in screen_indices:                
+                    coords = torch.tensor(np.load(f"../../dataset/{app}/{screen_idx}/gui_coords.npy")).float().unsqueeze(0).to(device)
+                    types = torch.tensor(np.load(f"../../dataset/{app}/{screen_idx}/gui_functional_types.npy")).unsqueeze(0).to(device)
+                    visions = torch.tensor(np.load(f"../../dataset/{app}/{screen_idx}/gui_vision_feature_maps.npy")).float().unsqueeze(0).to(device)
+                    texts = torch.tensor(np.load(f"../../dataset/{app}/{screen_idx}/gui_text_embeds.npy")).float().unsqueeze(0).to(device)
+                    padding_mask = torch.ones(1, types.size(1), dtype=torch.bool, device=device)
+        
+                    screen_emb = model.encode(
+                        coords=coords, 
+                        types=types,
+                        visions=visions,
+                        texts=texts,
+                        padding_mask=padding_mask,    
+                    )
 
-app_list = ["X", "Coupang"]
-set_name = f"{app_list[0]}_{app_list[1]}"
+                    mask = padding_mask.unsqueeze(-1)  # (B, G, 1)
+                    masked_emb = screen_emb * mask  # 패딩 위치는 0이 됨
+                    sum_emb = masked_emb.sum(dim=1)  # (B, D)
+                    valid_token_counts = mask.sum(dim=1)  # (B, 1)
+                    mean_emb = sum_emb / valid_token_counts.clamp(min=1)
+                    mean_emb = mean_emb.squeeze(0)
 
-model = ScreenCorrespondence(device=device).to(device)
-model.load_state_dict(torch.load(f"./weights/other_apps/SC/{set_name}/bestmodel.pth", weights_only=True))
-model.eval()
+                    embeddings[app][screen_idx] = mean_emb.detach().cpu().numpy()
 
-test_embeddings = {}
-for app in app_list:
-    test_embeddings[app] = {}
+    return embeddings
 
-transforms_fn = transforms.ToTensor()
+def topk_accuracy(truth, pred):
+    corrects = {}
+    counts = {}
+    for i in range(len(truth)):
+        if not truth[i] in corrects.keys():
+            corrects[truth[i]] = 0
+            counts[truth[i]] = 1
+        else:
+            counts[truth[i]] += 1
+        if truth[i] in pred[i]:
+            corrects[truth[i]] += 1
 
-with torch.no_grad():
-    for app in app_list:
-        class_idx = class2idx_dict[app]
-        for screen_indices in class_idx.values():
-            for screen_idx in screen_indices:                
-                coords = torch.tensor(np.load(f"./dataset/{app}/{screen_idx}/gui_coords.npy")).float().unsqueeze(0).to(device)
-                class_idx = torch.tensor(np.load(f"./dataset/{app}/{screen_idx}/gui_class_idx.npy")).unsqueeze(0).to(device)
-                visions = torch.tensor(np.load(f"./dataset/{app}/{screen_idx}/gui_visions.npy")).float().unsqueeze(0).to(device)
-                texts = torch.tensor(np.load(f"./dataset/{app}/{screen_idx}/gui_text_embed.npy")).float().unsqueeze(0).to(device)
-                padding_mask = torch.ones(1, class_idx.size(1), dtype=torch.bool, device=device)
-    
-                screen_emb = model.encode(
-                    coords=coords, 
-                    class_idx=class_idx,
-                    visions=visions,
-                    texts=texts,
-                    padding_mask=padding_mask,    
-                )
+    corrects = np.array(list(corrects.values()))
+    counts = np.array(list(counts.values()))
+    acc = corrects / counts
 
-                mask = padding_mask.unsqueeze(-1)  # (B, G, 1)
-                masked_emb = screen_emb * mask  # 패딩 위치는 0이 됨
-                sum_emb = masked_emb.sum(dim=1)  # (B, D)
-                valid_token_counts = mask.sum(dim=1)  # (B, 1)
-                mean_emb = sum_emb / valid_token_counts.clamp(min=1)
-                mean_emb = mean_emb.squeeze(0)
+    return np.mean(acc).item()
 
-                test_embeddings[app][screen_idx] = mean_emb.detach().cpu().numpy()
-                print(f"{screen_idx} of {app} completes")
+if __name__ == "__main__":
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = ScreenCorrespondence(device=device).to(device)
+    model.load_state_dict(torch.load(f"./weights/evaluate_X_Temu.pth", weights_only=True))
+    model.eval()
+
+    evaluation_apps = ["X", "Temu"]
+    embeddings_file = f"./embeddings/evaluate_{evaluation_apps[0]}_{evaluation_apps[1]}.npy"
+    if os.path.exists(embeddings_file):
+        embeddings = np.load(embeddings_file, allow_pickle=True).item()
+    else:
+        embeddings = embed(model, evaluation_apps)
+        np.save(embeddings_file, embeddings, allow_pickle=True)
+
+    truth = []
+    top1 = []
+    top2 = []
+    top3 = []
+
+    for app in evaluation_apps:
+        page2screen_indices = page2screen_indices_dict[app]
+        one_app_embeddings = embeddings[app]
+
+        for page_idx, screen_indices in tqdm(enumerate(page2screen_indices.values()), desc=f"Evaluating {app}"):
+            if len(screen_indices) < 2:
+                continue
+            for query in screen_indices:    
+                embedding_space = []
+                si_list = []
+                for si, embed in one_app_embeddings.items():
+                    if si == query:
+                        continue
+                    embedding_space.append(embed)
+                    si_list.append(si)
+                embedding_space = np.array(embedding_space)
+                
+                query_emb = one_app_embeddings[query].reshape(1, -1)
+
+                nn1 = NearestNeighbors(n_neighbors=1, metric='cosine')
+                nn1.fit(embedding_space)
+                _, indices1 = nn1.kneighbors(query_emb)
+                try:
+                    pred1 = [page_indices_dict[app][screen_idx2page_dict[app][si_list[indices1[0].item()]]]]
+                except:
+                    print(si_list[indices1[0].item()])
+        
+                nn2 = NearestNeighbors(n_neighbors=2, metric='cosine')
+                nn2.fit(embedding_space)
+                _, indices2 = nn2.kneighbors(query_emb)
+                pred2 = [page_indices_dict[app][screen_idx2page_dict[app][si_list[indices2[0][k].item()]]] for k in range(2)] 
+        
+                nn3 = NearestNeighbors(n_neighbors=3, metric='cosine')
+                nn3.fit(embedding_space)
+                _, indices3 = nn3.kneighbors(query_emb)
+                pred3 = [page_indices_dict[app][screen_idx2page_dict[app][si_list[indices3[0][k].item()]]] for k in range(3)] 
+        
+                truth.append(page_idx)
+                top1.append(pred1)
+                top2.append(pred2)
+                top3.append(pred3)
+
+    recall = recall_score(truth, top1, average='macro')
+    precision = precision_score(truth, top1, average='macro')
+    macro_f1 = f1_score(truth, top1, average='macro')
+    print(f"P: {precision:.3f}, R: {recall:.3f}, F1: {macro_f1:.3f}")
+
+    print(f"Top1: {topk_accuracy(truth, top1):.3f}")
+    print(f"Top2: {topk_accuracy(truth, top2):.3f}")
+    print(f"Top3: {topk_accuracy(truth, top3):.3f}")

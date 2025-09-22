@@ -54,7 +54,7 @@ if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = PW2SS(device=device).to(device)
 
-    train_valid_split = np.load("../dataset/train_valid_split.npy", allow_pickle=True).item()
+    train_valid_split = np.load("../../dataset/train_valid_split.npy", allow_pickle=True).item()
 
     app_list = ["Facebook", "Instagram", "Amazon", "Coupang"]
 
@@ -114,11 +114,11 @@ if __name__ == "__main__":
                 # For details on the PW2SS input format, please refer to the original paper.
                 # "You can immediately evaluate the retrieval performance using the provided embeddings file."
 
-                text_embed.append(torch.tensor(np.load(f".../dataset/{app}/{si}/screen_ocr_embed.npy")))
-                text_coords.append(torch.tensor(np.load(f".../dataset/{app}/{si}/screen_ocr_coords.npy")))
-                graphic_types.append(torch.tensor(np.load(f".../dataset/{app}/{si}/gui_class_idx.npy")))
-                graphic_coords.append(torch.tensor(np.load(f".../dataset/{app}/{si}/gui_coords.npy")))
-                layout.append(transforms_fn(np.load(f".../dataset/{app}/{si}/layout_image.npy")))
+                text_embed.append(torch.tensor(np.load(f"../../dataset/{app}/{si}/screen_ocr_embed.npy")))
+                text_coords.append(torch.tensor(np.load(f"../../dataset/{app}/{si}/screen_ocr_coords.npy")))
+                graphic_types.append(torch.tensor(np.load(f"../../dataset/{app}/{si}/gui_class_idx.npy")))
+                graphic_coords.append(torch.tensor(np.load(f"../../dataset/{app}/{si}/gui_coords.npy")))
+                layout.append(transforms_fn(np.load(f"../../dataset/{app}/{si}/layout_image.npy")))
 
             padded_text_embed = pad_sequence(text_embed, batch_first=True).float().to(device)
             padded_text_coords = pad_sequence(text_coords, batch_first=True).float().to(device)
@@ -167,11 +167,11 @@ if __name__ == "__main__":
                     si = screen_indices[bi]
                     app = app_names[bi]
                     
-                    text_embed.append(torch.tensor(np.load(f".../dataset/{app}/{si}/screen_ocr_embed.npy")))
-                    text_coords.append(torch.tensor(np.load(f".../dataset/{app}/{si}/screen_ocr_coords.npy")))
-                    graphic_types.append(torch.tensor(np.load(f".../dataset/{app}/{si}/gui_class_idx.npy")))
-                    graphic_coords.append(torch.tensor(np.load(f".../dataset/{app}/{si}/gui_coords.npy")))
-                    layout.append(transforms_fn(np.load(f".../dataset/{app}/{si}/layout_image.npy")))
+                    text_embed.append(torch.tensor(np.load(f"../../dataset/{app}/{si}/screen_ocr_embed.npy")))
+                    text_coords.append(torch.tensor(np.load(f"../../dataset/{app}/{si}/screen_ocr_coords.npy")))
+                    graphic_types.append(torch.tensor(np.load(f"../../dataset/{app}/{si}/gui_class_idx.npy")))
+                    graphic_coords.append(torch.tensor(np.load(f"../../dataset/{app}/{si}/gui_coords.npy")))
+                    layout.append(transforms_fn(np.load(f"../../dataset/{app}/{si}/layout_image.npy")))
     
                 padded_text_embed = pad_sequence(text_embed, batch_first=True).float().to(device)
                 padded_text_coords = pad_sequence(text_coords, batch_first=True).float().to(device)

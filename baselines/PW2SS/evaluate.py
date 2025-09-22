@@ -21,7 +21,7 @@ def embed(model, evaluation_apps):
     with torch.no_grad():
         for app in evaluation_apps:
             page2screen_indices = page2screen_indices_dict[app]
-            for screen_indices in page2screen_indices.values():
+            for screen_indices in tqdm(page2screen_indices.values(), desc=f"Embedding {app}"):
                 for si in screen_indices:         
                     text_embed = torch.tensor(np.load(f".../dataset/{app}/{si}/screen_ocr_embed.npy")).float().unsqueeze(0).to(device)
                     text_coords = torch.tensor(np.load(f".../dataset/{app}/{si}/screen_ocr_coords.npy")).float().unsqueeze(0).to(device)
@@ -67,7 +67,7 @@ def topk_accuracy(truth, pred):
     return np.mean(acc).item()
 
 if __name__ == "__main__":
-    device = "cuda:1" if torch.cuda.is_available() else "cpu"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     model = PW2SS(device=device).to(device)
     model.load_state_dict(torch.load(f"./weights/evaluate_X_Temu.pth", weights_only=True))
     model.eval()
