@@ -1,3 +1,9 @@
 torch
 transformers==4.51.1
 scikit-learn
+ultralytics
+sentence_transformers
+paddlepaddle
+paddleocr
+einops
+timm
