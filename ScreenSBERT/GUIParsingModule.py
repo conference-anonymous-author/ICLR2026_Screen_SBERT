@@ -133,7 +133,7 @@ def sort_boxes(boxes, height=1.0, y_threshold=0.05):
 
 class Detectioner:
     def __init__(self, model_path):
-        self.device = "cuda:1" if torch.cuda.is_available() else "cpu"
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         self.model = YOLO(model_path).to(self.device)
         self.model.eval()
@@ -193,7 +193,7 @@ class Detectioner:
 
 class GUIParsingModule:
     def __init__(self):
-        self.device = "cuda:1" if torch.cuda.is_available() else "cpu"
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         # We used the YOLO weights from OmniParser and the Florence-2 weights for the implementation of this module.
         # https://github.com/microsoft/OmniParser
