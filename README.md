@@ -9,3 +9,35 @@ Because of this data format, it is not possible to re-train baselines such as PW
 For all other models:
 - You may attempt to train them from scratch using the provided code.
 - You can also evaluate the performance of already trained models using the provided weights files.
+
+## Install
+First clone the repo, and then install environment:
+```bash
+cd ICLR2026_Screen_SBERT
+conda create -n "ScreenSBERT" python==3.12
+conda activate ScreenSBERT
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+## Screen-SBERT
+
+### GUI Parsing Module
+Run:
+```bash
+cd ScreenSBERT
+python GUIParsingModule.py
+```
+Output:
+```bash
+Parsing results of ./example_screenshot.jpg:
+Coordinates: (16, 6)
+Feature Maps: (16, 25088)
+Text Embeddings: (16, 768)
+Functional Types: (16,)
+```
+
+### Evaluation Pre-trained Model
+Run:
+```
+```
