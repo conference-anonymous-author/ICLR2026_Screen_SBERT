@@ -322,6 +322,6 @@ if __name__ == "__main__":
                 print(f"Val {step} >> Intra: {total_intra_distance:.6f}, Inter: {total_inter_distance:.6f}, Score: {total_score:.6f}")
                 if best_valid_score < total_score:
                     best_valid_score = total_score
-                    torch.save(model.state_dict(), "./weights/bestmodel.pth")
+                    torch.save(model.state_dict(), "./weights/ScreenSBERT/bestmodel.pth")
 
                 model.train()
