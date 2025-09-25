@@ -157,7 +157,7 @@ if __name__ == "__main__":
 
     train_valid_split = np.load("../dataset/train_valid_split.npy", allow_pickle=True).item()
 
-    app_list = ["Instagram", "X", "Coupang", "Temu"]
+    app_list = ["Instagram", "Facebook", "Coupang", "Amazon"]
 
     best_val_score = 0
 

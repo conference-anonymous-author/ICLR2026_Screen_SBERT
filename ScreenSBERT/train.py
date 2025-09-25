@@ -2,16 +2,12 @@ import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
-import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
-import math
 import numpy as np
 from torch.nn.utils.rnn import pad_sequence
 import random
-from sklearn.metrics import precision_recall_curve
-from sklearn.model_selection import train_test_split
 import copy
 from collections import defaultdict
 from transformers import get_scheduler
@@ -160,7 +156,7 @@ if __name__ == "__main__":
 
     train_valid_split = np.load("../dataset/train_valid_split.npy", allow_pickle=True).item()
 
-    train_apps = ["X", "Instagram", "Coupang", "Temu"]
+    train_apps = ["Facebook", "Instagram", "Coupang", "Amazon"]
 
     best_valid_score = 0
 
